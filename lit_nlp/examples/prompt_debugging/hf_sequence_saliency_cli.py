@@ -21,7 +21,7 @@ def _pad1d(arr: list[int], min_len: int, pad_val: int, pad_left: bool, max_len: 
 
 
 def _left_pad_target_mask(seq_length: int, target_mask: list[int], pad_left: bool) -> torch.Tensor:
-  # Match LIT logic: mask[0] must be 0 because token 0 is never predicted.
+  # Match LIT logic: first token position (index 0) is never predicted.
   modified = [0] + list(target_mask[1:])
   padded = _pad1d(
       modified, min_len=seq_length, max_len=seq_length, pad_val=0, pad_left=pad_left
@@ -58,7 +58,8 @@ def run(model_name: str, prompt: str, target: str, target_mask: str | None) -> d
   input_ids = encoded["input_ids"]
   attention_mask = encoded["attention_mask"]
   # Next-token targets: token t predicts token t+1.
-  # `roll` wraps the last position, but the shifted loss mask below zeroes it out.
+  # `roll` wraps the last position, matching LIT's implementation; the shifted
+  # loss mask below zeroes out that wrapped position.
   target_ids = torch.roll(input_ids, shifts=-1, dims=1)
 
   user_mask = _parse_target_mask(target_mask, seq_length=target_ids.shape[1])
@@ -83,7 +84,7 @@ def run(model_name: str, prompt: str, target: str, target_mask: str | None) -> d
   grads = torch.autograd.grad(
       masked_loss, embs, grad_outputs=torch.ones_like(masked_loss)
   )[0]
-  # Match LIT behavior: use detached inputs in grad·input scoring.
+  # Match LIT behavior: use detached inputs in grad dot input scoring.
   embs_detached = embs.detach()
   grad_l2 = torch.norm(grads, dim=2)
   grad_dot_input = torch.sum(grads * embs_detached, dim=2)
