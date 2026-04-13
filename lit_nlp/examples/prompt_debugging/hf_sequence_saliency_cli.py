@@ -47,7 +47,7 @@ def run(model_name: str, prompt: str, target: str, target_mask: str | None) -> d
   tokenizer = transformers.AutoTokenizer.from_pretrained(
       model_name, use_fast=False, padding_side="left"
   )
-  if tokenizer.eos_token is not None:
+  if tokenizer.pad_token is None and tokenizer.eos_token is not None:
     tokenizer.pad_token = tokenizer.eos_token
   model = transformers.AutoModelForCausalLM.from_pretrained(model_name).to(device)
   model.eval()
@@ -68,6 +68,7 @@ def run(model_name: str, prompt: str, target: str, target_mask: str | None) -> d
 
   embedding_table = model.get_input_embeddings()
   embs = embedding_table(input_ids)
+  embs.requires_grad_()
   outs = model(input_ids=None, inputs_embeds=embs, attention_mask=attention_mask)
 
   loss_fn = torch.nn.CrossEntropyLoss(reduction="none")
@@ -77,8 +78,10 @@ def run(model_name: str, prompt: str, target: str, target_mask: str | None) -> d
   grads = torch.autograd.grad(
       masked_loss, embs, grad_outputs=torch.ones_like(masked_loss)
   )[0]
+  # Match LIT behavior: use detached inputs in grad·input scoring.
+  embs_detached = embs.detach()
   grad_l2 = torch.norm(grads, dim=2)
-  grad_dot_input = torch.sum(grads * embs.detach(), dim=2)
+  grad_dot_input = torch.sum(grads * embs_detached, dim=2)
 
   keep = attention_mask[0].bool()
   kept_ids = input_ids[0][keep].detach().cpu().tolist()
