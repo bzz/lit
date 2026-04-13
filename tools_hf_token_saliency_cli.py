@@ -90,13 +90,18 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument(
         "--max-length",
         type=int,
-        default=256,
-        help="Tokenizer truncation length for the full prompt+target sequence",
+        default=0,
+        help="Truncate prompt+target to this many tokens (0 = no limit)",
     )
     parser.add_argument(
         "--chat",
         action="store_true",
         help="Apply the model's chat template (wraps --text as a user message)",
+    )
+    parser.add_argument(
+        "--full",
+        action="store_true",
+        help="Color all tokens with saliency (not just the prompt)",
     )
     parser.add_argument(
         "--raw",
@@ -108,27 +113,32 @@ def parse_args() -> argparse.Namespace:
 
 def score_to_style(score: float, min_s: float, max_s: float, signed: bool) -> str:
     eps = 1e-12
+    threshold = 0.15  # below this intensity, no background color
     if signed:
-        # Diverging: blue (negative) → grey (zero) → red (positive).
+        # Diverging: blue (negative) → transparent (zero) → red (positive).
         bound = max(abs(min_s), abs(max_s), eps)
         norm = max(-1.0, min(1.0, score / bound))
-        if norm >= 0:
-            r = int(80 + 170 * norm)
-            g = int(80 - 50 * norm)
-            b = int(80 - 50 * norm)
-            return f"white on rgb({r},{g},{b})"
         a = abs(norm)
-        r = int(80 - 50 * a)
-        g = int(80 - 50 * a)
-        b = int(80 + 170 * a)
+        if a < threshold:
+            return ""
+        if norm >= 0:
+            r = int(100 + 155 * a)
+            g = int(30 + 20 * (1 - a))
+            b = int(30 + 20 * (1 - a))
+            return f"white on rgb({r},{g},{b})"
+        r = int(30 + 20 * (1 - a))
+        g = int(30 + 20 * (1 - a))
+        b = int(100 + 155 * a)
         return f"white on rgb({r},{g},{b})"
 
-    # Unsigned: grey (low) → bright yellow (high).
+    # Unsigned: transparent (low) → bright yellow (high).
     denom = max(max_s - min_s, eps)
     norm = max(0.0, min(1.0, (score - min_s) / denom))
-    r = int(70 + 180 * norm)
-    g = int(70 + 160 * norm)
-    b = int(70 - 50 * norm)
+    if norm < threshold:
+        return ""
+    r = int(100 + 155 * norm)
+    g = int(100 + 130 * norm)
+    b = int(20)
     return f"black on rgb({r},{g},{b})"
 
 
@@ -173,6 +183,7 @@ def compute_saliency(
     max_tokens: int,
     target_ids: set[int] | None,
     chat: bool = False,
+    full: bool = False,
 ) -> SaliencyResult:
     import torch
     from transformers import AutoModelForCausalLM, AutoTokenizer
@@ -211,9 +222,9 @@ def compute_saliency(
     full_ids = prompt_ids + target_id_list
     prompt_len = len(prompt_ids)
 
-    if len(full_ids) > max_length:
+    if max_length > 0 and len(full_ids) > max_length:
         full_ids = full_ids[:max_length]
-    prompt_len = min(prompt_len, len(full_ids))
+        prompt_len = min(prompt_len, len(full_ids))
 
     num_target = len(full_ids) - prompt_len
     if num_target < 1:
@@ -227,12 +238,14 @@ def compute_saliency(
 
     # Build loss mask (length = seq_len - 1, matching shifted logits).
     # Position i in shifted logits predicts token i+1.
-    # We want loss where predicted token (i+1) is a target token (abs index >= prompt_len).
     # --target-ids uses absolute indices matching the 'i' column in --raw output.
+    # With --full: loss on all tokens (or up to --target-ids).
+    # Without --full: loss only on target tokens (abs index >= prompt_len).
     seq_len = input_ids.shape[1]
     shifted_len = seq_len - 1
     loss_mask = torch.zeros(1, shifted_len, device=device)
-    for i in range(prompt_len - 1, shifted_len):
+    start = 0 if full else prompt_len - 1
+    for i in range(start, shifted_len):
         abs_idx = i + 1  # absolute index of the predicted token
         if target_ids is None or abs_idx in target_ids:
             loss_mask[0, i] = 1.0
@@ -298,20 +311,20 @@ def _display_tok(tok: str) -> str:
     return display if display else "␠"
 
 
-def render_result(console: Console, result: SaliencyResult, show_raw: bool = False) -> None:
+def render_result(console: Console, result: SaliencyResult, show_raw: bool = False, full: bool = False) -> None:
     # Target text for easy copying.
     console.print(f"\n[bold]Target:[/bold] {result.target_text}\n")
 
     signed = result.method == "grad-dot-input"
-    prompt_scores = result.scores[:result.prompt_len]
-    min_s = min(prompt_scores) if prompt_scores else 0.0
-    max_s = max(prompt_scores) if prompt_scores else 0.0
+    scores_for_scale = result.scores if full else result.scores[:result.prompt_len]
+    min_s = min(scores_for_scale) if scores_for_scale else 0.0
+    max_s = max(scores_for_scale) if scores_for_scale else 0.0
 
     has_selection = result.target_id_indices is not None
     selected: set[int] = set(result.target_id_indices) if result.target_id_indices is not None else set()
 
     console.print(_render_legend(signed))
-    console.print(f"[bold]Prompt saliency[/bold] ({result.method}):")
+    console.print(f"[bold]{'Saliency' if full else 'Prompt saliency'}[/bold] ({result.method}):")
     prompt_text = Text()
     for i in range(result.prompt_len):
         tok, score = result.tokens[i], result.scores[i]
@@ -321,8 +334,13 @@ def render_result(console: Console, result: SaliencyResult, show_raw: bool = Fal
     console.print(f"\n[bold]Target:[/bold]")
     target_text = Text()
     for i in range(result.prompt_len, len(result.tokens)):
-        tok = result.tokens[i]
-        if has_selection and i in selected:
+        tok, score = result.tokens[i], result.scores[i]
+        if full:
+            style = score_to_style(score, min_s, max_s, signed=signed)
+            if has_selection and i in selected:
+                style += " underline"
+            target_text.append(_display_tok(tok), style=style)
+        elif has_selection and i in selected:
             target_text.append(_display_tok(tok), style="underline")
         else:
             target_text.append(_display_tok(tok), style="dim")
@@ -376,8 +394,9 @@ def main() -> None:
         max_tokens=args.max_tokens,
         target_ids=target_ids,
         chat=args.chat,
+        full=args.full,
     )
-    render_result(console, result, show_raw=args.raw)
+    render_result(console, result, show_raw=args.raw, full=args.full)
 
 
 if __name__ == "__main__":

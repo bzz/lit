@@ -59,8 +59,8 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument(
         "--max-length",
         type=int,
-        default=256,
-        help="Tokenizer truncation length for the full prompt+target sequence",
+        default=0,
+        help="Truncate prompt+target to this many tokens (0 = no limit)",
     )
     parser.add_argument(
         "--trust-remote-code",
@@ -71,6 +71,11 @@ def parse_args() -> argparse.Namespace:
         "--chat",
         action="store_true",
         help="Apply the model's chat template (wraps --text as a user message)",
+    )
+    parser.add_argument(
+        "--full",
+        action="store_true",
+        help="Color all tokens with saliency (not just the prompt)",
     )
     parser.add_argument("--raw", action="store_true", help="Print raw token saliency table")
     return parser.parse_args()
@@ -116,6 +121,7 @@ def compute_saliency(
     trust_remote_code: bool,
     target_ids: set[int] | None,
     chat: bool = False,
+    full: bool = False,
 ) -> SaliencyResult:
     try:
         import mlx.core as mx
@@ -150,9 +156,9 @@ def compute_saliency(
     full_ids = prompt_ids + target_id_list
     prompt_len = len(prompt_ids)
 
-    if len(full_ids) > max_length:
+    if max_length > 0 and len(full_ids) > max_length:
         full_ids = full_ids[:max_length]
-    prompt_len = min(prompt_len, len(full_ids))
+        prompt_len = min(prompt_len, len(full_ids))
 
     num_target = len(full_ids) - prompt_len
     if num_target < 1:
@@ -166,9 +172,12 @@ def compute_saliency(
     # Build loss mask (length = len(full_ids) - 1, matching shifted logits).
     # Position i in shifted logits predicts token i+1.
     # --target-ids uses absolute indices matching the 'i' column in --raw output.
+    # With --full: loss on all tokens (or up to --target-ids).
+    # Without --full: loss only on target tokens (abs index >= prompt_len).
     shifted_len = len(full_ids) - 1
     loss_mask = [0.0] * shifted_len
-    for i in range(prompt_len - 1, shifted_len):
+    start = 0 if full else prompt_len - 1
+    for i in range(start, shifted_len):
         abs_idx = i + 1  # absolute index of the predicted token
         if target_ids is None or abs_idx in target_ids:
             loss_mask[i] = 1.0
@@ -236,8 +245,9 @@ def main() -> None:
         trust_remote_code=args.trust_remote_code,
         target_ids=target_ids,
         chat=args.chat,
+        full=args.full,
     )
-    render_result(console, result, show_raw=args.raw)
+    render_result(console, result, show_raw=args.raw, full=args.full)
 
 
 if __name__ == "__main__":
