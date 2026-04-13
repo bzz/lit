@@ -12,7 +12,9 @@ import torch
 import transformers
 
 
-def _pad1d(arr: list[int], min_len: int, pad_val: int, pad_left: bool, max_len: int) -> list[int]:
+def _pad1d(
+    arr: list[int], min_len: int, max_len: int, pad_val: int, pad_left: bool
+) -> list[int]:
   if pad_left:
     padded = [pad_val] * max(0, min_len - len(arr)) + arr
     return padded[-max_len:]
@@ -37,6 +39,7 @@ def _parse_target_mask(raw_mask: str | None, seq_length: int) -> list[int]:
   if not raw_mask:
     return [1] * seq_length
   vals = [int(x.strip()) for x in raw_mask.split(",") if x.strip()]
+  # Length is normalized to seq_length by _left_pad_target_mask().
   if any(v not in (0, 1) for v in vals):
     raise ValueError("--target-mask must contain only 0/1 values.")
   return vals
