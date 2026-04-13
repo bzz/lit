@@ -56,6 +56,7 @@ def run(model_name: str, prompt: str, target: str, target_mask: str | None) -> d
   encoded = tokenizer(text, return_tensors="pt", add_special_tokens=True).to(device)
   input_ids = encoded["input_ids"]
   attention_mask = encoded["attention_mask"]
+  # Next-token targets: token t predicts token t+1.
   target_ids = torch.roll(input_ids, shifts=-1, dims=1)
 
   user_mask = _parse_target_mask(target_mask, seq_length=target_ids.shape[1])
@@ -64,6 +65,7 @@ def run(model_name: str, prompt: str, target: str, target_mask: str | None) -> d
       target_mask=user_mask,
       pad_left=tokenizer.padding_side == "left",
   )
+  # Shift the loss mask so it aligns with target_ids above.
   loss_mask = torch.roll(padded_target_mask, shifts=-1, dims=1).to(device)
 
   embedding_table = model.get_input_embeddings()
