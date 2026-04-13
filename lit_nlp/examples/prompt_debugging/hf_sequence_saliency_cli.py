@@ -47,6 +47,7 @@ def run(model_name: str, prompt: str, target: str, target_mask: str | None) -> d
   tokenizer = transformers.AutoTokenizer.from_pretrained(
       model_name, use_fast=False, padding_side="left"
   )
+  # Align with LIT behavior for decoder-style models that lack a pad token.
   if tokenizer.pad_token is None and tokenizer.eos_token is not None:
     tokenizer.pad_token = tokenizer.eos_token
   model = transformers.AutoModelForCausalLM.from_pretrained(model_name).to(device)
@@ -57,6 +58,7 @@ def run(model_name: str, prompt: str, target: str, target_mask: str | None) -> d
   input_ids = encoded["input_ids"]
   attention_mask = encoded["attention_mask"]
   # Next-token targets: token t predicts token t+1.
+  # `roll` wraps the last position, but the shifted loss mask below zeroes it out.
   target_ids = torch.roll(input_ids, shifts=-1, dims=1)
 
   user_mask = _parse_target_mask(target_mask, seq_length=target_ids.shape[1])
@@ -74,6 +76,7 @@ def run(model_name: str, prompt: str, target: str, target_mask: str | None) -> d
   outs = model(input_ids=None, inputs_embeds=embs, attention_mask=attention_mask)
 
   loss_fn = torch.nn.CrossEntropyLoss(reduction="none")
+  # CrossEntropyLoss expects class dim at index 1: [batch, vocab, seq].
   per_token_loss = loss_fn(outs.logits.permute(0, 2, 1), target_ids)
   masked_loss = per_token_loss * loss_mask
 
