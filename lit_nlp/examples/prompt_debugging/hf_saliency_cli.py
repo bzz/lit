@@ -59,6 +59,8 @@ def pick_device(device_flag: str) -> str:
 
 
 def pick_dtype(dtype_flag: str) -> torch.dtype | str:
+  if dtype_flag not in DTYPES:
+    raise ValueError(f"Unsupported dtype {dtype_flag!r}; expected one of {DTYPES}.")
   if dtype_flag == "auto":
     return "auto"
   return {
@@ -177,8 +179,10 @@ def compute_saliency(
 
   if method == "grad_dot_input":
     scores = torch.sum(grads * embeddings, dim=2)
-  else:
+  elif method == "grad_l2":
     scores = torch.norm(grads, dim=2)
+  else:
+    raise ValueError(f"Unsupported saliency method {method!r}.")
 
   scores = (scores * attention_mask).detach().cpu()[0]
   scores[0] = 0
@@ -363,12 +367,12 @@ def main() -> None:
   console.print(Panel(response_text or "(empty response)", title="Response", style=RESPONSE_STYLE))
   display_sequence(console, tokens=tokens, prompt_length=prompt_length)
 
-  default_target_start = prompt_length
-  if default_target_start >= input_ids.shape[1]:
-    default_target_start = max(1, input_ids.shape[1] - 1)
+  safe_target_start = prompt_length
+  if safe_target_start >= input_ids.shape[1]:
+    safe_target_start = max(1, input_ids.shape[1] - 1)
   target_spec = args.target or Prompt.ask(
       "Target token range",
-      default=f"{default_target_start}:{input_ids.shape[1]}",
+      default=f"{safe_target_start}:{input_ids.shape[1]}",
   )
   target_range = parse_token_range(target_spec, input_ids.shape[1])
   target_mask = build_target_mask(input_ids.shape[1], target_range).to(device)
