@@ -47,7 +47,8 @@ def run(model_name: str, prompt: str, target: str, target_mask: str | None) -> d
   tokenizer = transformers.AutoTokenizer.from_pretrained(
       model_name, use_fast=False, padding_side="left"
   )
-  tokenizer.pad_token = tokenizer.eos_token
+  if tokenizer.eos_token is not None:
+    tokenizer.pad_token = tokenizer.eos_token
   model = transformers.AutoModelForCausalLM.from_pretrained(model_name).to(device)
   model.eval()
 
