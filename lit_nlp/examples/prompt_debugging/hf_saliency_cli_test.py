@@ -17,6 +17,7 @@ def test_compute_saliency_for_supported_methods():
   input_ids = torch.tensor([[1, 2, 3, 4, 5]])
   attention_mask = torch.ones_like(input_ids)
   target_mask = hf_saliency_cli.build_target_mask(input_ids.shape[1], (3, 5))
+  results = {}
 
   for method in hf_saliency_cli.METHODS:
     scores = hf_saliency_cli.compute_saliency(
@@ -29,3 +30,7 @@ def test_compute_saliency_for_supported_methods():
     assert scores.shape == (input_ids.shape[1],)
     assert torch.isfinite(scores).all()
     assert scores[0].item() == 0
+    results[method] = scores
+
+  assert torch.all(results["grad_l2"] >= 0)
+  assert not torch.allclose(results["grad_l2"], results["grad_dot_input"])

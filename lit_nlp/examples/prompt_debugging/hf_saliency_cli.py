@@ -160,6 +160,7 @@ def compute_saliency(
 
   embedding_table = model.get_input_embeddings()
   embeddings = embedding_table(input_ids)
+  embeddings.requires_grad_(True)
   outputs = model(
       input_ids=None,
       inputs_embeds=embeddings,
